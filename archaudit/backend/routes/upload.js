@@ -5,7 +5,7 @@ const cloudinary = require('cloudinary').v2;
 const { nanoid } = require('nanoid');
 const { parseZipStructure } = require('../utils/structureParser');
 const { analyzeStructure, isGeminiConfigured } = require('../utils/gemini');
-const { publicKeyPem, decryptPayload } = require('../utils/crypto');
+const { publicKeyPem, decryptPayload, encryptResponse } = require('../utils/crypto');
 
 // Configure Cloudinary
 cloudinary.config({
@@ -18,7 +18,10 @@ cloudinary.config({
 const storage = multer.memoryStorage();
 const upload = multer({ 
   storage,
-  limits: { fileSize: 20 * 1024 * 1024 }, // 20 MB limit
+  limits: { 
+    fileSize: 20 * 1024 * 1024, // 20 MB limit for files
+    fieldSize: 30 * 1024 * 1024 // 30 MB limit for text fields (important for base64 encrypted data)
+  },
 });
 
 // In-memory store for shareable links (id -> data)
@@ -38,10 +41,13 @@ router.post('/upload', upload.single('file'), async (req, res) => {
     let zipBuffer;
 
     // Check if the payload is encrypted or a raw file
+    let aesKeyBytes = null;
     if (req.body.encryptedData) {
       // Handle Encrypted Payload
       const { encryptedFile, encryptedKey, iv } = JSON.parse(req.body.encryptedData);
-      zipBuffer = decryptPayload(encryptedFile, encryptedKey, iv);
+      const decrypted = decryptPayload(encryptedFile, encryptedKey, iv);
+      zipBuffer = decrypted.decryptedData;
+      aesKeyBytes = decrypted.aesKeyBytes;
     } else if (req.file) {
       // Handle standard file upload (keep for backward compatibility/testing)
       if (req.file.mimetype !== 'application/zip' && req.file.mimetype !== 'application/x-zip-compressed') {
@@ -104,10 +110,18 @@ router.post('/upload', upload.single('file'), async (req, res) => {
     
     analysisStore.set(shareId, resultData);
 
-    res.json({
+    const responsePayload = {
       ...resultData,
       shareId
-    });
+    };
+
+    // If request was encrypted, encrypt the response too
+    if (aesKeyBytes) {
+      const encryptedResponse = encryptResponse(responsePayload, aesKeyBytes);
+      return res.json(encryptedResponse);
+    }
+
+    res.json(responsePayload);
 
   } catch (error) {
     console.error('Upload Error:', error);

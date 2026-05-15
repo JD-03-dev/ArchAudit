@@ -3,7 +3,7 @@ import { UploadCloud, FileType, AlertCircle } from "lucide-react";
 import { useAppStore } from "../store/useAppStore";
 import { cn, API_URL } from "../lib/utils";
 import axios from "axios";
-import { encryptFile } from "../utils/crypto";
+import { encryptFile, decryptResponse } from "../utils/crypto";
 
 export function UploadZone() {
   const { setStatus, setError, setResult, status, error, setFileInfo, framework } =
@@ -45,11 +45,11 @@ export function UploadZone() {
 
       // 2. Encrypt File Locally
       setStatus("analyzing"); // Show progress
-      const encryptedPayload = await encryptFile(file, publicKey);
+      const { payload, aesKey } = await encryptFile(file, publicKey);
 
       // 3. Send Encrypted Data
       const formData = new FormData();
-      formData.append("encryptedData", JSON.stringify(encryptedPayload));
+      formData.append("encryptedData", JSON.stringify(payload));
       formData.append("framework", framework);
 
       const response = await axios.post(
@@ -62,7 +62,13 @@ export function UploadZone() {
         },
       );
 
-      setResult(response.data);
+      let result = response.data;
+      // Handle encrypted response
+      if (result.encryptedData) {
+        result = await decryptResponse(result, aesKey);
+      }
+
+      setResult(result);
     } catch (err: any) {
       setError(
         err.response?.data?.error ||
